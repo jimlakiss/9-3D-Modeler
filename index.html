@@ -49,6 +49,10 @@
       <label><input id="pp" type="checkbox" checked /> Push / Pull</label>
     </div>
 
+    <div class="ui-row ui-inline">
+      <label><input id="wallMode" type="checkbox" checked /> Wall Mode (UVW)</label>
+    </div>
+
     <div class="ui-actions">
       <button id="apply" type="button" class="btn primary">Apply to Selected</button>
       <button id="clear" type="button" class="btn secondary">Clear All</button>
@@ -62,22 +66,22 @@
   <div id="dimModal" class="modal hidden" aria-hidden="true">
     <div class="modal__panel">
       <div class="modal__header">
-        <div class="modal__title">Set Dimensions (optional)</div>
-        <div class="modal__help">Enter = apply • Esc = cancel</div>
+        <div class="modal__title">Wall Dimensions (UVW)</div>
+        <div class="modal__help">Tab = next • Enter = apply • Esc = cancel</div>
       </div>
 
       <div class="modal__grid">
         <div class="field">
-          <label for="dl_L">Length X (mm)</label>
-          <input id="dl_L" type="number" step="1" placeholder="(mouse)" />
+          <label for="dl_U">U - Length (mm)</label>
+          <input id="dl_U" type="number" step="1" placeholder="drag or type" />
         </div>
         <div class="field">
-          <label for="dl_W">Width Z (mm)</label>
-          <input id="dl_W" type="number" step="1" placeholder="(mouse)" />
+          <label for="dl_V">V - Height (mm)</label>
+          <input id="dl_V" type="number" step="1" placeholder="drag or type" />
         </div>
         <div class="field">
-          <label for="dl_H">Height Y (mm)</label>
-          <input id="dl_H" type="number" step="1" placeholder="uses UI" />
+          <label for="dl_W">W - Thickness (mm)</label>
+          <input id="dl_W" type="number" step="1" placeholder="drag or type" />
         </div>
         <div class="field">
           <label for="dl_baseY">BaseY (mm)</label>
@@ -86,14 +90,18 @@
       </div>
 
       <div class="modal__actions">
-        <button id="dl_apply" type="button" class="btn primary">Apply</button>
-        <button id="dl_clear" type="button" class="btn secondary">Clear</button>
+        <button id="dl_apply" type="button" class="btn primary">Complete Wall</button>
+        <button id="dl_clear" type="button" class="btn secondary">Cancel</button>
       </div>
     </div>
   </div>
 
   <div id="hint">
-    Click empty space: start box • Click again: finish box • Drag selected: move • Delete: remove<br/>
+    <span id="hintBoxMode">Click empty space: start box • Click again: finish box • Drag selected: move • Delete: remove</span>
+    <span id="hintWallMode" style="display:none">
+      Step 1: Drag U (length) • Step 2: Set V (height) • Step 3: Set W (thickness) • Tab=next • Enter=apply
+    </span>
+    <br/>
     Push/Pull: enable checkbox, hover a face, click+drag. Axis lock: X/Y/Z.
   </div>
 

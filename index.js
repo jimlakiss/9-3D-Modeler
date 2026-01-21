@@ -78,17 +78,33 @@ const baseYEl = document.getElementById("baseY");
 const snapEl = document.getElementById("snap");
 const snapSizeEl = document.getElementById("snapSize");
 const ppEl = document.getElementById("pp");
+const wallModeEl = document.getElementById("wallMode");
 const outEl = document.getElementById("out");
 const applyBtn = document.getElementById("apply");
 const clearBtn = document.getElementById("clear");
+const hintBoxMode = document.getElementById("hintBoxMode");
+const hintWallMode = document.getElementById("hintWallMode");
+
+// Toggle hints based on wall mode
+if (wallModeEl) {
+  wallModeEl.addEventListener("change", () => {
+    const isWall = wallModeEl.checked;
+    if (hintBoxMode) hintBoxMode.style.display = isWall ? "none" : "inline";
+    if (hintWallMode) hintWallMode.style.display = isWall ? "inline" : "none";
+  });
+  // Set initial state
+  const isWall = wallModeEl.checked;
+  if (hintBoxMode) hintBoxMode.style.display = isWall ? "none" : "inline";
+  if (hintWallMode) hintWallMode.style.display = isWall ? "inline" : "none";
+}
 
 // -----------------------------
 // Dimension Modal (HTML/CSS based)
 // -----------------------------
 const dimModal = document.getElementById("dimModal");
-const dlL = document.getElementById("dl_L");
+const dlU = document.getElementById("dl_U");
+const dlV = document.getElementById("dl_V");
 const dlW = document.getElementById("dl_W");
-const dlH = document.getElementById("dl_H");
 const dlBaseY = document.getElementById("dl_baseY");
 const dlApply = document.getElementById("dl_apply");
 const dlClear = document.getElementById("dl_clear");
@@ -99,17 +115,59 @@ const drawLock = { active: false, L: null, W: null, H: null, baseY: null };
 const dlManual = { L: false, W: false, H: false };
 let suppressModalAuto = false;
 
-dlL?.addEventListener("input", () => { 
+// Manual input tracking for UVW (wall mode)
+const uvwManual = { U: false, V: false, W: false };
+
+dlU?.addEventListener("input", () => { 
   if (suppressModalAuto) return;
-  dlManual.L = dlL.value !== ""; 
+  dlManual.L = dlU.value !== "";
+  uvwManual.U = dlU.value !== ""; 
+  // Update preview immediately if drawing
+  if (drawing && startPt && lastGroundPoint) {
+    currentPt = computeEndpoint(startPt, lastGroundPoint);
+    updatePreviewRect(startPt, currentPt);
+  }
+  // Update wall preview if in wall mode
+  if (wallDrawing.active && wallDrawing.step === 1 && dlU.value) {
+    const val = Number(dlU.value);
+    if (val > 0 && wallDrawing.U) {
+      wallDrawing.U.length = val;
+      updateWallPreview();
+    }
+  }
 });
+
+dlV?.addEventListener("input", () => { 
+  if (suppressModalAuto) return;
+  dlManual.W = dlV.value !== "";
+  uvwManual.V = dlV.value !== ""; 
+  // Update preview immediately if drawing
+  if (drawing && startPt && lastGroundPoint) {
+    currentPt = computeEndpoint(startPt, lastGroundPoint);
+    updatePreviewRect(startPt, currentPt);
+  }
+  // Update wall preview if in wall mode
+  if (wallDrawing.active && wallDrawing.step === 2 && dlV.value) {
+    const val = Number(dlV.value);
+    if (val >= 0) {
+      wallDrawing.V.length = val;
+      updateWallPreview();
+    }
+  }
+});
+
 dlW?.addEventListener("input", () => { 
   if (suppressModalAuto) return;
-  dlManual.W = dlW.value !== ""; 
-});
-dlH?.addEventListener("input", () => { 
-  if (suppressModalAuto) return;
-  dlManual.H = dlH.value !== ""; 
+  dlManual.H = dlW.value !== "";
+  uvwManual.W = dlW.value !== ""; 
+  // Update wall preview if in wall mode
+  if (wallDrawing.active && wallDrawing.step === 3 && dlW.value) {
+    const val = Number(dlW.value);
+    if (val > 0) {
+      wallDrawing.W.length = val;
+      updateWallPreview();
+    }
+  }
 });
 // Update modal fields with relative deltas from start point to current mouse point.
 // Length shows |ΔX|, Width shows |ΔZ|. Height shows current UI height (hgtEl) unless user overrides.
@@ -151,7 +209,7 @@ widEl?.addEventListener("input", () => {
 });
 
 // When modal L/W inputs change, update preview immediately
-dlL?.addEventListener("input", () => {
+dlU?.addEventListener("input", () => {
   if (drawing && startPt && lastGroundPoint) {
     currentPt = computeEndpoint(startPt, lastGroundPoint);
     updatePreviewRect(startPt, currentPt);
@@ -189,16 +247,16 @@ function updateDimModalLive(mousePointOnGround) {
   const dz = mousePointOnGround.z - startPt.z;
 
   // If the field is empty, it is always "mouse-driven" (reverts automatically when cleared)
-  if (dlL && dlL.value === "" && dlL !== document.activeElement) dlL.value = String(Math.round(Math.abs(dx)));
+  if (dlU && dlU.value === "" && dlU !== document.activeElement) dlU.value = String(Math.round(Math.abs(dx)));
   if (dlW && dlW.value === "" && dlW !== document.activeElement) dlW.value = String(Math.round(Math.abs(dz)));
 
   // If user hasn't manually typed, keep mirroring mouse
-  if (!dlManual.L && dlL && dlL !== document.activeElement) dlL.value = String(Math.round(Math.abs(dx)));
+  if (!dlManual.L && dlU && dlU !== document.activeElement) dlU.value = String(Math.round(Math.abs(dx)));
   if (!dlManual.W && dlW && dlW !== document.activeElement) dlW.value = String(Math.round(Math.abs(dz)));
 
   // Height mirrors sidebar height unless user overrides
-  if (!dlManual.H && dlH && dlH !== document.activeElement && hgtEl) {
-    dlH.value = String(Math.round(Number(hgtEl.value) || 0));
+  if (!dlManual.H && dlV && dlV !== document.activeElement && hgtEl) {
+    dlV.value = String(Math.round(Number(hgtEl.value) || 0));
   }
 }
 
@@ -210,9 +268,9 @@ function showDimModal() {
 
   // Focus LENGTH field reliably after display change
   requestAnimationFrame(() => {
-    dlL?.focus({ preventScroll: true });
+    dlU?.focus({ preventScroll: true });
     // Select existing value so typing overwrites
-    if (typeof dlL?.select === "function") dlL.select();
+    if (typeof dlU?.select === "function") dlU.select();
   });
 }
 
@@ -225,10 +283,10 @@ function hideDimModal() {
 function clearDimModal() {
   suppressModalAuto = true;
   try {
-    dlL.value = "";
-    dlW.value = "";
-    dlH.value = "";
-    dlBaseY.value = "";
+    if (dlU) dlU.value = "";
+    if (dlV) dlV.value = "";
+    if (dlW) dlW.value = "";
+    if (dlBaseY) dlBaseY.value = "";
   } finally {
     suppressModalAuto = false;
   }
@@ -238,6 +296,9 @@ function clearDimModal() {
   dlManual.L = false;
   dlManual.W = false;
   dlManual.H = false;
+  uvwManual.U = false;
+  uvwManual.V = false;
+  uvwManual.W = false;
   sbManual.L = false;
   sbManual.W = false;
 }
@@ -248,9 +309,9 @@ function applyDimModal() {
   
   // Apply dimension locks
   drawLock.active = true;
-  drawLock.L = (dlL.value === "") ? null : Math.max(1, Number(dlL.value));
+  drawLock.L = (dlU.value === "") ? null : Math.max(1, Number(dlU.value));
   drawLock.W = (dlW.value === "") ? null : Math.max(1, Number(dlW.value));
-  drawLock.H = (dlH.value === "") ? null : Math.max(0, Number(dlH.value));
+  drawLock.H = (dlV.value === "") ? null : Math.max(0, Number(dlV.value));
   drawLock.baseY = (dlBaseY.value === "") ? null : Number(dlBaseY.value);
 
   // sync UI if user typed H/baseY
@@ -287,11 +348,19 @@ window.addEventListener("keydown", (e) => {
   const isOpen = dimModal.getAttribute("aria-hidden") === "false";
   if (!isOpen) return;
 
-  // ENTER / NUMPAD ENTER => Click the Apply button
+  // ENTER / NUMPAD ENTER => Click the Apply button or advance wall mode
   if (e.key === "Enter" || e.code === "NumpadEnter") {
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     e.preventDefault();
-    dlApply?.click();
+    
+    // Wall mode ENTER handling
+    if (wallDrawing.active) {
+      if (wallDrawing.step === 1) lockWallU();
+      else if (wallDrawing.step === 2) lockWallV();
+      else if (wallDrawing.step === 3) completeWall();
+    } else {
+      dlApply?.click();
+    }
     return;
   }
 
@@ -312,6 +381,17 @@ let drawing = false;
 let startPt = null;
 let currentPt = null;
 let lastGroundPoint = null; // latest ground point under mouse (for live preview + overrides)
+
+// Wall Mode (UVW Sequential) State
+let wallDrawing = {
+  active: false,
+  step: 0,              // 0=none, 1=U, 2=V, 3=W
+  origin: null,         // Start point (THREE.Vector3)
+  U: null,              // { direction: THREE.Vector3 (unit), length: number }
+  V: null,              // { direction: THREE.Vector3 (unit), length: number }
+  W: null,              // { direction: THREE.Vector3 (unit), length: number }
+  currentMousePt: null  // Latest mouse position
+};
 
 
 let drag = {
@@ -496,7 +576,300 @@ function cancelDrawing() {
   clearPreview();
   hideDimModal();
   clearDimModal();
+  cancelWallDrawing();
   exportQuantities({ cancelled: true });
+}
+
+// -----------------------------
+// Wall Mode (UVW Sequential Input)
+// -----------------------------
+
+function isWallMode() {
+  return wallModeEl?.checked || false;
+}
+
+function cancelWallDrawing() {
+  wallDrawing.active = false;
+  wallDrawing.step = 0;
+  wallDrawing.origin = null;
+  wallDrawing.U = null;
+  wallDrawing.V = null;
+  wallDrawing.W = null;
+  wallDrawing.currentMousePt = null;
+  clearPreview();
+}
+
+function startWallDrawing(groundPoint) {
+  if (!isWallMode()) return false;
+  
+  wallDrawing.active = true;
+  wallDrawing.step = 1; // Start with U
+  wallDrawing.origin = groundPoint.clone();
+  wallDrawing.currentMousePt = groundPoint.clone();
+  
+  showDimModal();
+  
+  // Focus U input
+  requestAnimationFrame(() => {
+    dlU?.focus({ preventScroll: true });
+    if (typeof dlU?.select === "function") dlU.select();
+  });
+  
+  exportQuantities({ wall_drawing_started: true });
+  return true;
+}
+
+function updateWallDrawingStep1_U(mousePoint) {
+  if (!wallDrawing.active || wallDrawing.step !== 1) return;
+  
+  wallDrawing.currentMousePt = mousePoint.clone();
+  
+  // Calculate U direction and length from origin to mouse
+  const delta = mousePoint.clone().sub(wallDrawing.origin);
+  delta.y = 0; // Keep in horizontal plane
+  const length = delta.length();
+  
+  if (length < 1) return; // Too small to show direction
+  
+  const direction = delta.clone().normalize();
+  
+  // Update temporary U
+  wallDrawing.U = { direction, length };
+  
+  // Update modal U field if not manually set
+  if (dlU && dlU !== document.activeElement && !uvwManual.U) {
+    dlU.value = String(Math.round(length));
+  }
+  
+  // Draw preview line
+  updateWallPreview();
+}
+
+function lockWallU() {
+  if (!wallDrawing.active || wallDrawing.step !== 1) return false;
+  if (!wallDrawing.U || wallDrawing.U.length < 1) return false;
+  
+  // Lock U from input if typed
+  const typedU = dlU?.value ? Number(dlU.value) : null;
+  if (typedU && typedU > 0) {
+    wallDrawing.U.length = typedU;
+  }
+  
+  wallDrawing.step = 2; // Advance to V
+  
+  // Focus V input
+  requestAnimationFrame(() => {
+    dlV?.focus({ preventScroll: true });
+    if (typeof dlV?.select === "function") dlV.select();
+  });
+  
+  // Set default V from sidebar height or use 2700mm
+  const defaultV = Number(hgtEl?.value) || 2700;
+  if (dlV && !uvwManual.V) {
+    dlV.value = String(Math.round(defaultV));
+  }
+  wallDrawing.V = { direction: new THREE.Vector3(0, 1, 0), length: defaultV };
+  
+  updateWallPreview();
+  exportQuantities({ wall_step: 2, U_locked: true });
+  return true;
+}
+
+function lockWallV() {
+  if (!wallDrawing.active || wallDrawing.step !== 2) return false;
+  if (!wallDrawing.V || wallDrawing.V.length < 0) return false;
+  
+  // Lock V from input if typed
+  const typedV = dlV?.value ? Number(dlV.value) : null;
+  if (typedV != null && typedV >= 0) {
+    wallDrawing.V.length = typedV;
+  }
+  
+  wallDrawing.step = 3; // Advance to W
+  
+  // Focus W input
+  requestAnimationFrame(() => {
+    dlW?.focus({ preventScroll: true });
+    if (typeof dlW?.select === "function") dlW.select();
+  });
+  
+  // Set default W (thickness) to 230mm
+  const defaultW = 230;
+  if (dlW && !uvwManual.W) {
+    dlW.value = String(Math.round(defaultW));
+  }
+  
+  // W direction is perpendicular to U in the horizontal plane
+  // Cross product: U × (0,1,0) gives perpendicular in XZ plane
+  const perpDir = new THREE.Vector3()
+    .crossVectors(wallDrawing.U.direction, new THREE.Vector3(0, 1, 0))
+    .normalize();
+  
+  wallDrawing.W = { direction: perpDir, length: defaultW };
+  
+  updateWallPreview();
+  exportQuantities({ wall_step: 3, V_locked: true });
+  return true;
+}
+
+function completeWall() {
+  if (!wallDrawing.active) return false;
+  if (!wallDrawing.U || !wallDrawing.V || !wallDrawing.W) return false;
+  
+  // Create wall box from UVW
+  const U = wallDrawing.U;
+  const V = wallDrawing.V;
+  const W = wallDrawing.W;
+  const origin = wallDrawing.origin;
+  
+  // Get baseY from UI or use origin.y
+  const baseY = Number(baseYEl?.value) || origin.y;
+  
+  // Wall center is: origin + U/2 along U direction + W/2 along W direction + V/2 up
+  const centerX = origin.x + U.direction.x * (U.length / 2) + W.direction.x * (W.length / 2);
+  const centerY = baseY + V.length / 2;
+  const centerZ = origin.z + U.direction.z * (U.length / 2) + W.direction.z * (W.length / 2);
+  
+  // Create geometry - dimensions are U.length × V.length × W.length
+  const geometry = new THREE.BoxGeometry(U.length, V.length, W.length);
+  const material = new THREE.MeshStandardMaterial({ color: NORMAL_COLOR });
+  const mesh = new THREE.Mesh(geometry, material);
+  
+  mesh.position.set(centerX, centerY, centerZ);
+  
+  // Rotate mesh to align with U direction
+  // U is in XZ plane, so rotate around Y axis
+  // BoxGeometry's local X axis should align with U
+  const angle = Math.atan2(U.direction.x, U.direction.z);
+  mesh.rotation.y = angle;
+  
+  const id = `box_${nextId++}`;
+  mesh.userData.id = id;
+  
+  scene.add(mesh);
+  
+  const box = {
+    id,
+    mesh,
+    meta: { 
+      baseY, 
+      height: V.length,
+      uvw: { U: U.length, V: V.length, W: W.length }
+    }
+  };
+  
+  objects.push(box);
+  setSingleSelection(id);
+  
+  // Clear wall drawing state
+  cancelWallDrawing();
+  hideDimModal();
+  clearDimModal();
+  
+  exportQuantities({ wall_created: true, dimensions: { U: U.length, V: V.length, W: W.length } });
+  
+  return true;
+}
+
+function updateWallPreview() {
+  if (!wallDrawing.active) return;
+  
+  const step = wallDrawing.step;
+  const origin = wallDrawing.origin;
+  
+  if (step === 1 && wallDrawing.U) {
+    // Step 1: Show U line
+    const end = origin.clone().add(
+      wallDrawing.U.direction.clone().multiplyScalar(wallDrawing.U.length)
+    );
+    
+    const positions = [
+      origin.x, origin.y + 10, origin.z,
+      end.x, end.y + 10, end.z
+    ];
+    
+    previewLineGeom.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+    previewLine.visible = true;
+  } else if (step === 2 && wallDrawing.U && wallDrawing.V) {
+    // Step 2: Show U×V plane (wall face)
+    const U = wallDrawing.U;
+    const V = wallDrawing.V;
+    
+    const baseY = Number(baseYEl?.value) || origin.y;
+    
+    // Four corners of the face
+    const p1 = origin.clone();
+    p1.y = baseY;
+    
+    const p2 = origin.clone().add(U.direction.clone().multiplyScalar(U.length));
+    p2.y = baseY;
+    
+    const p3 = p2.clone();
+    p3.y = baseY + V.length;
+    
+    const p4 = p1.clone();
+    p4.y = baseY + V.length;
+    
+    const positions = [
+      p1.x, p1.y, p1.z,
+      p2.x, p2.y, p2.z,
+      p3.x, p3.y, p3.z,
+      p4.x, p4.y, p4.z,
+      p1.x, p1.y, p1.z
+    ];
+    
+    previewLineGeom.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+    previewLine.visible = true;
+  } else if (step === 3 && wallDrawing.U && wallDrawing.V && wallDrawing.W) {
+    // Step 3: Show full 3D box preview
+    const U = wallDrawing.U;
+    const V = wallDrawing.V;
+    const W = wallDrawing.W;
+    
+    const baseY = Number(baseYEl?.value) || origin.y;
+    
+    // Front face corners
+    const p1 = origin.clone();
+    p1.y = baseY;
+    
+    const p2 = origin.clone().add(U.direction.clone().multiplyScalar(U.length));
+    p2.y = baseY;
+    
+    const p3 = p2.clone();
+    p3.y = baseY + V.length;
+    
+    const p4 = p1.clone();
+    p4.y = baseY + V.length;
+    
+    // Back face offset by W
+    const offset = W.direction.clone().multiplyScalar(W.length);
+    const p5 = p1.clone().add(offset);
+    const p6 = p2.clone().add(offset);
+    const p7 = p3.clone().add(offset);
+    const p8 = p4.clone().add(offset);
+    
+    // Draw wireframe
+    const positions = [
+      // Front face
+      p1.x, p1.y, p1.z, p2.x, p2.y, p2.z,
+      p2.x, p2.y, p2.z, p3.x, p3.y, p3.z,
+      p3.x, p3.y, p3.z, p4.x, p4.y, p4.z,
+      p4.x, p4.y, p4.z, p1.x, p1.y, p1.z,
+      // Back face
+      p5.x, p5.y, p5.z, p6.x, p6.y, p6.z,
+      p6.x, p6.y, p6.z, p7.x, p7.y, p7.z,
+      p7.x, p7.y, p7.z, p8.x, p8.y, p8.z,
+      p8.x, p8.y, p8.z, p5.x, p5.y, p5.z,
+      // Connecting edges
+      p1.x, p1.y, p1.z, p5.x, p5.y, p5.z,
+      p2.x, p2.y, p2.z, p6.x, p6.y, p6.z,
+      p3.x, p3.y, p3.z, p7.x, p7.y, p7.z,
+      p4.x, p4.y, p4.z, p8.x, p8.y, p8.z
+    ];
+    
+    previewLineGeom.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+    previewLine.visible = true;
+  }
 }
 
 function computeEndpoint(start, mousePoint) {
@@ -509,7 +882,7 @@ function computeEndpoint(start, mousePoint) {
   // 1) Modal L/W if non-empty
   // 2) Sidebar len/wid if user manually typed (non-empty)
   // 3) Mouse delta
-  const modalL = getOverrideAbsNumber(dlL);
+  const modalL = getOverrideAbsNumber(dlU);
   const modalW = getOverrideAbsNumber(dlW);
 
   const sideL = (typeof sbManual !== "undefined" && sbManual.L) ? getOverrideAbsNumber(lenEl) : null;
@@ -1198,6 +1571,16 @@ renderer.domElement.addEventListener("pointermove", (e) => {
 
   updateHoverFaceHighlight(e);
 
+  // Wall mode step 1: update U
+  if (wallDrawing.active && wallDrawing.step === 1) {
+    const p = raycastGround(e);
+    if (p) {
+      updateWallDrawingStep1_U(p);
+    }
+    return;
+  }
+
+  // Box mode drawing
   if (drawing && startPt) {
     const p = raycastGround(e);
     if (!p) return;
@@ -1239,28 +1622,36 @@ if (ppEl?.checked && objects.length && !e.altKey) {
   // Empty click: clear selection unless ctrl/cmd held
   if (!(e.ctrlKey || e.metaKey)) clearSelection();
 
-  // Draw start/finish
+  // Drawing start
   const p = raycastGround(e);
   if (!p) return;
 
-  if (!drawing) {
-    drawing = true;
-    startPt = p;
-    currentPt = p.clone();
-    clearPreview();
-    showDimModal();
-    exportQuantities({ drawing: "started" });
+  // WALL MODE or BOX MODE
+  if (isWallMode()) {
+    if (!wallDrawing.active) {
+      startWallDrawing(p);
+    }
   } else {
-    currentPt = computeEndpoint(startPt, p);
-    updatePreviewRect(startPt, currentPt);
-    createBoxFromFootprint(startPt, currentPt);
-    drawing = false;
-    startPt = null;
-    currentPt = null;
-    clearPreview();
-    exportQuantities({ drawing: "finished" });
-    hideDimModal();
-    clearDimModal();
+    // Original box mode logic
+    if (!drawing) {
+      drawing = true;
+      startPt = p;
+      currentPt = p.clone();
+      clearPreview();
+      showDimModal();
+      exportQuantities({ drawing: "started" });
+    } else {
+      currentPt = computeEndpoint(startPt, p);
+      updatePreviewRect(startPt, currentPt);
+      createBoxFromFootprint(startPt, currentPt);
+      drawing = false;
+      startPt = null;
+      currentPt = null;
+      clearPreview();
+      exportQuantities({ drawing: "finished" });
+      hideDimModal();
+      clearDimModal();
+    }
   }
 });
 
@@ -1288,6 +1679,14 @@ renderer.domElement.addEventListener("dblclick", (e) => e.preventDefault());
 window.addEventListener("keydown", (e) => {
   const isMac = navigator.platform.toUpperCase().includes("MAC");
   const mod = isMac ? e.metaKey : e.ctrlKey;
+
+  // Wall Mode TAB advancement
+  if (e.key === "Tab" && wallDrawing.active) {
+    e.preventDefault();
+    if (wallDrawing.step === 1) lockWallU();
+    else if (wallDrawing.step === 2) lockWallV();
+    return;
+  }
 
   // Undo / Redo (ignore while typing)
   if (mod && e.key.toLowerCase() === "z" && !isTypingTarget(document.activeElement)) {

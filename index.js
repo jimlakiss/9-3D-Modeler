@@ -577,16 +577,37 @@ function setSingleSelection(id) {
   selected.add(id);
   refreshSelectionVisuals();
   
-  // If in wall mode AND not actively drawing/editing, populate modal with selected wall's dimensions
-  // (Don't re-open modal immediately after creating a wall)
+  const obj = getObjectById(id);
+  if (!obj) {
+    exportQuantities();
+    return;
+  }
+  
+  // Populate fields based on mode
   if (isWallMode() && !wallDrawing.active) {
-    const obj = getObjectById(id);
-    if (obj) {
-      populateModalFromWall(obj);
-    }
+    // Wall mode: open modal with UVW
+    populateModalFromWall(obj);
+  } else if (!isWallMode() && !drawing) {
+    // Box mode: populate sidebar fields
+    populateSidebarFromBox(obj);
   }
   
   exportQuantities();
+}
+
+function populateSidebarFromBox(obj) {
+  const params = obj.mesh.geometry.parameters;
+  const width = params.width;   // Length (X)
+  const depth = params.depth;   // Width (Z)
+  const height = params.height; // Height (Y)
+  
+  // Populate sidebar fields
+  if (lenEl) lenEl.value = String(Math.round(width));
+  if (widEl) widEl.value = String(Math.round(depth));
+  if (hgtEl) hgtEl.value = String(Math.round(height));
+  if (baseYEl && obj.meta && obj.meta.baseY != null) {
+    baseYEl.value = String(Math.round(obj.meta.baseY));
+  }
 }
 
 function populateModalFromWall(obj) {
@@ -1639,6 +1660,9 @@ function updatePushPull(e) {
 
   // Movement along face normal
   let delta = p.clone().sub(startPoint).dot(faceN);
+  
+  // Minimum movement threshold to prevent accidental tiny changes
+  if (Math.abs(delta) < 5) return; // 5mm threshold
 
   if (e.shiftKey) delta *= 0.25;
 
@@ -1670,13 +1694,26 @@ function updatePushPull(e) {
   // Update meta (baseY is always bottom face world Y)
   o.meta.height = newH;
   o.meta.baseY = newCenter.y - (newH / 2);
+  
+  // Update UVW metadata for walls (local space dimensions)
+  if (o.meta.uvw) {
+    o.meta.uvw = { U: newL, V: newH, W: newW };
+  }
 
   o.mesh.updateMatrixWorld(true);
 
   // Sync UI (active object)
-  if (lenEl) lenEl.value = String(Math.round(newL));
-  if (widEl) widEl.value = String(Math.round(newW));
-  if (hgtEl) hgtEl.value = String(Math.round(newH));
+  if (isWallMode()) {
+    // Wall mode: update UVW fields if modal is open
+    if (dlU) dlU.value = String(Math.round(newL));
+    if (dlV) dlV.value = String(Math.round(newH));
+    if (dlW) dlW.value = String(Math.round(newW));
+  } else {
+    // Box mode: update LWH fields
+    if (lenEl) lenEl.value = String(Math.round(newL));
+    if (widEl) widEl.value = String(Math.round(newW));
+    if (hgtEl) hgtEl.value = String(Math.round(newH));
+  }
   if (baseYEl) baseYEl.value = String(Math.round(o.meta.baseY));
 
   exportQuantities({
@@ -1821,8 +1858,8 @@ renderer.domElement.addEventListener("pointermove", (e) => {
 
   updateHoverFaceHighlight(e);
 
-  // Wall mode step 1: update U
-  if (wallDrawing.active && wallDrawing.step === 1) {
+  // Wall mode step 1: update U (only when creating, not editing)
+  if (wallDrawing.active && wallDrawing.step === 1 && !wallDrawing.editingWall) {
     const p = raycastGround(e);
     if (p) {
       updateWallDrawingStep1_U(p);
@@ -1847,10 +1884,11 @@ renderer.domElement.addEventListener("pointerdown", (e) => {
   if (e.button !== 0) return;
 
   // If push/pull enabled, try start push/pull first (unless Alt held = MOVE override)
-if (ppEl?.checked && objects.length && !e.altKey) {
-  const started = startPushPull(e);
-  if (started) return;
-}
+  // Also skip push/pull if in wall editing mode
+  if (ppEl?.checked && objects.length && !e.altKey && !wallDrawing.editingWall) {
+    const started = startPushPull(e);
+    if (started) return;
+  }
 
   // Hit test objects for selection/drag
   const hits = objects.length ? raycastObjects(e) : [];

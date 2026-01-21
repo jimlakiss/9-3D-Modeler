@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>QS Box Takeoff Multi</title>
+  <link rel="stylesheet" href="./style.css" />
+
+  <!-- Import map required by index.js (three + addons) -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div id="ui">
+    <div class="ui-title">QS Box Takeoff (Multi)</div>
+
+    <div class="ui-row">
+      <label>Length (X) mm</label>
+      <input id="len" type="number" value="2000" />
+    </div>
+
+    <div class="ui-row">
+      <label>Width (Z) mm</label>
+      <input id="wid" type="number" value="2000" />
+    </div>
+
+    <div class="ui-row">
+      <label>Height (Y) mm</label>
+      <input id="hgt" type="number" value="150" />
+    </div>
+
+    <div class="ui-row">
+      <label>BaseY (mm)</label>
+      <input id="baseY" type="number" value="0" />
+    </div>
+
+    <div class="ui-row ui-inline">
+      <label><input id="snap" type="checkbox" checked /> Grid snap</label>
+      <input id="snapSize" type="number" value="10" min="1" />
+    </div>
+
+    <div class="ui-row ui-inline">
+      <label><input id="pp" type="checkbox" checked /> Push / Pull</label>
+    </div>
+
+    <div class="ui-actions">
+      <button id="apply" type="button" class="btn primary">Apply to Selected</button>
+      <button id="clear" type="button" class="btn secondary">Clear All</button>
+    </div>
+
+    <label class="ui-subtitle">Export</label>
+    <pre id="out">{}</pre>
+  </div>
+
+  <!-- Dimension entry modal -->
+  <div id="dimModal" class="modal hidden" aria-hidden="true">
+    <div class="modal__panel">
+      <div class="modal__header">
+        <div class="modal__title">Set Dimensions (optional)</div>
+        <div class="modal__help">Enter = apply • Esc = cancel</div>
+      </div>
+
+      <div class="modal__grid">
+        <div class="field">
+          <label for="dl_L">Length X (mm)</label>
+          <input id="dl_L" type="number" step="1" placeholder="(mouse)" />
+        </div>
+        <div class="field">
+          <label for="dl_W">Width Z (mm)</label>
+          <input id="dl_W" type="number" step="1" placeholder="(mouse)" />
+        </div>
+        <div class="field">
+          <label for="dl_H">Height Y (mm)</label>
+          <input id="dl_H" type="number" step="1" placeholder="uses UI" />
+        </div>
+        <div class="field">
+          <label for="dl_baseY">BaseY (mm)</label>
+          <input id="dl_baseY" type="number" step="1" placeholder="uses UI" />
+        </div>
+      </div>
+
+      <div class="modal__actions">
+        <button id="dl_apply" type="button" class="btn primary">Apply</button>
+        <button id="dl_clear" type="button" class="btn secondary">Clear</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="hint">
+    Click empty space: start box • Click again: finish box • Drag selected: move • Delete: remove<br/>
+    Push/Pull: enable checkbox, hover a face, click+drag. Axis lock: X/Y/Z.
+  </div>
+
+  <script type="module" src="./index.js"></script>
+</body>
+</html>

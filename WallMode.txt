@@ -1,0 +1,386 @@
+# Wall Mode (UVW Sequential Input) - Implementation Guide
+
+## Overview
+Transform the box drawing system into a sequential UVW workflow for vertical elements (walls).
+
+---
+
+## User Experience Flow
+
+### Step 1: Start Drawing (Click Empty Space)
+- Click on ground plane to set origin point
+- Modal opens with UVW fields
+- Focus on U (Length) input
+- **Status**: "Step 1: Set U (Length)"
+
+### Step 2: Define U - Length
+**Mouse Input:**
+- Drag mouse in ANY direction from origin
+- Blue line follows mouse showing length
+- Length updates in U field (if not manually typed)
+
+**Keyboard Input:**
+- Type dimension directly into U field
+- Line extends in last mouse direction
+
+**Lock U and Advance:**
+- Press TAB → locks U, advances to V
+- Press ENTER → locks U, advances to V
+- U direction and length are now fixed
+
+### Step 3: Define V - Height  
+**Visual:**
+- Blue vertical plane (U×V face) shows wall face
+- Height shown from baseY upward
+
+**Input:**
+- Type height into V field
+- Default: 2700mm or value from sidebar Height field
+
+**Lock V and Advance:**
+- Press TAB → locks V, advances to W
+- Press ENTER → locks V, advances to W
+
+### Step 4: Define W - Thickness
+**Visual:**
+- Full 3D wireframe box preview
+- Thickness perpendicular to U in plan
+
+**Input:**
+- Type thickness into W field
+- Default: 230mm
+
+**Complete Wall:**
+- Press ENTER → creates wall, closes modal
+- Click Apply button → creates wall, closes modal
+
+### Cancel Anytime:
+- Press ESC → cancels wall drawing, closes modal
+- Click Clear button → cancels wall drawing
+
+---
+
+## Technical Implementation
+
+### 1. State Structure
+
+```javascript
+let wallDrawing = {
+  active: false,        // Is wall drawing in progress?
+  step: 0,              // 0=none, 1=U, 2=V, 3=W
+  origin: null,         // THREE.Vector3 - start point
+  U: {                  // Length dimension
+    direction: THREE.Vector3(unit vector),
+    length: number (mm)
+  },
+  V: {                  // Height dimension  
+    direction: THREE.Vector3(0,1,0),  // Always up
+    length: number (mm)
+  },
+  W: {                  // Thickness dimension
+    direction: THREE.Vector3(perp to U),
+    length: number (mm)
+  },
+  currentMousePt: null  // Latest mouse position
+};
+```
+
+### 2. Key Functions
+
+```javascript
+function isWallMode() {
+  return wallModeEl?.checked || false;
+}
+
+function startWallDrawing(groundPoint) {
+  wallDrawing.active = true;
+  wallDrawing.step = 1;
+  wallDrawing.origin = groundPoint.clone();
+  showDimModal();
+  focusField(dlU);
+}
+
+function updateWallDrawingStep1_U(mousePoint) {
+  // Calculate direction and length from origin to mouse
+  // Update wallDrawing.U
+  // Update preview line
+  // Update U field if not manually set
+}
+
+function lockWallU() {
+  // Get value from field if typed
+  // wallDrawing.lockedU = true
+  // wallDrawing.step = 2
+  // Set default V and focus V field
+}
+
+function lockWallV() {
+  // Get value from field if typed
+  // wallDrawing.lockedV = true
+  // wallDrawing.step = 3
+  // Calculate W direction (perpendicular to U)
+  // Set default W and focus W field
+}
+
+function completeWall() {
+  // Create BoxGeometry with dimensions U.length × V.length × W.length
+  // Position at origin + offsets
+  // Rotate to align with U direction: rotation.y = atan2(U.x, U.z)
+  // Add to scene
+  // Clear wall drawing state
+}
+
+function updateWallPreview() {
+  if (step === 1) {
+    // Draw line from origin to origin + U
+  } else if (step === 2) {
+    // Draw rectangle (U × V face)
+  } else if (step === 3) {
+    // Draw wireframe box
+  }
+}
+```
+
+### 3. Event Handling
+
+**Pointer Down (Canvas Click):**
+```javascript
+if (isWallMode() && !wallDrawing.active) {
+  const groundPt = raycastGround(e);
+  startWallDrawing(groundPt);
+}
+```
+
+**Pointer Move:**
+```javascript
+if (wallDrawing.active && wallDrawing.step === 1) {
+  const mousePt = raycastGround(e);
+  updateWallDrawingStep1_U(mousePt);
+}
+```
+
+**Key Down:**
+```javascript
+// TAB key
+if (e.key === "Tab" && wallDrawing.active) {
+  e.preventDefault();
+  if (wallDrawing.step === 1) lockWallU();
+  else if (wallDrawing.step === 2) lockWallV();
+}
+
+// ENTER key  
+if (e.key === "Enter" && wallDrawing.active) {
+  e.preventDefault();
+  if (wallDrawing.step === 1) lockWallU();
+  else if (wallDrawing.step === 2) lockWallV();
+  else if (wallDrawing.step === 3) completeWall();
+}
+
+// ESC key
+if (e.key === "Escape" && wallDrawing.active) {
+  cancelWallDrawing();
+}
+```
+
+**Modal Input Fields:**
+```javascript
+// U field - type and update preview
+dlU?.addEventListener("input", () => {
+  if (wallDrawing.active && wallDrawing.step === 1) {
+    const val = Number(dlU.value);
+    if (val > 0 && wallDrawing.U) {
+      wallDrawing.U.length = val;
+      updateWallPreview();
+    }
+  }
+});
+
+// V field
+dlV?.addEventListener("input", () => {
+  if (wallDrawing.active && wallDrawing.step === 2) {
+    const val = Number(dlV.value);
+    if (val >= 0) {
+      wallDrawing.V.length = val;
+      updateWallPreview();
+    }
+  }
+});
+
+// W field
+dlW?.addEventListener("input", () => {
+  if (wallDrawing.active && wallDrawing.step === 3) {
+    const val = Number(dlW.value);
+    if (val > 0) {
+      wallDrawing.W.length = val;
+      updateWallPreview();
+    }
+  }
+});
+```
+
+### 4. Modal Updates
+
+**HTML Changes:**
+- Change labels: "U - Length", "V - Height", "W - Thickness"
+- Change IDs: dl_L → dl_U, dl_H → dl_V, dl_W → dl_W
+- Update help text: "Tab = next • Enter = apply"
+- Update button text: "Complete Wall"
+
+**Visual Step Indicator:**
+Add to modal header:
+```html
+<div class="modal__step" id="wallStep">Step 1: Set Length (U)</div>
+```
+
+Update on step change:
+- Step 1: "Step 1: Set Length (U) - drag or type"
+- Step 2: "Step 2: Set Height (V) - drag or type"  
+- Step 3: "Step 3: Set Thickness (W) - type dimension"
+
+### 5. Wall Geometry Creation
+
+```javascript
+function completeWall() {
+  const U = wallDrawing.U;
+  const V = wallDrawing.V;
+  const W = wallDrawing.W;
+  const origin = wallDrawing.origin;
+  const baseY = Number(baseYEl?.value) || origin.y;
+  
+  // Box dimensions
+  const geometry = new THREE.BoxGeometry(U.length, V.length, W.length);
+  const material = new THREE.MeshStandardMaterial({ color: NORMAL_COLOR });
+  const mesh = new THREE.Mesh(geometry, material);
+  
+  // Center position: origin + U/2 + W/2 + V/2
+  const centerX = origin.x + U.direction.x * U.length/2 + W.direction.x * W.length/2;
+  const centerY = baseY + V.length / 2;
+  const centerZ = origin.z + U.direction.z * U.length/2 + W.direction.z * W.length/2;
+  
+  mesh.position.set(centerX, centerY, centerZ);
+  
+  // Rotation to align with U direction
+  // U is in XZ plane (horizontal)
+  // Rotate around Y axis to align box's length (X axis) with U
+  const angle = Math.atan2(U.direction.x, U.direction.z);
+  mesh.rotation.y = angle;
+  
+  // Add to scene and registry
+  const id = `box_${nextId++}`;
+  mesh.userData.id = id;
+  scene.add(mesh);
+  
+  objects.push({
+    id,
+    mesh,
+    meta: { baseY, height: V.length, 
+           uvw: { U: U.length, V: V.length, W: W.length } }
+  });
+  
+  setSingleSelection(id);
+  cancelWallDrawing();
+}
+```
+
+---
+
+## UI Enhancements
+
+### 1. Mode Toggle
+Add checkbox to sidebar:
+```html
+<input id="wallMode" type="checkbox" checked /> Wall Mode (UVW)
+```
+
+### 2. Dynamic Hints
+Update hint text based on mode:
+- Box Mode: "Click empty space: start box..."
+- Wall Mode: "Step 1: Drag U (length) • Step 2: Set V (height)..."
+
+### 3. Field Highlighting
+Highlight current active field in modal:
+```css
+.modal .field.active {
+  border: 2px solid #7dd3fc;
+  background: rgba(125, 211, 252, 0.1);
+}
+```
+
+### 4. Dimension Labels in 3D
+Show floating labels during drawing:
+- Step 1: "U: 4500mm" at midpoint of line
+- Step 2: "V: 2700mm" at side of plane
+- Step 3: "W: 230mm" showing thickness
+
+---
+
+## Testing Checklist
+
+- [ ] Click to start, drag to set U length
+- [ ] Type U dimension, line updates
+- [ ] TAB advances from U to V
+- [ ] ENTER advances from U to V
+- [ ] Default V (height) appears
+- [ ] Type V dimension, preview updates
+- [ ] TAB advances from V to W
+- [ ] ENTER advances from V to W
+- [ ] Default W (thickness) appears, perpendicular to U
+- [ ] Type W dimension, preview updates
+- [ ] ENTER completes wall
+- [ ] Wall created with correct dimensions
+- [ ] Wall rotated to align with U direction
+- [ ] ESC cancels at any step
+- [ ] Modal fields focus in sequence
+- [ ] Preview shows: line → plane → wireframe box
+- [ ] Works at any angle (not just grid-aligned)
+- [ ] BaseY respected from sidebar
+- [ ] Push/pull still works on created walls
+- [ ] Undo/redo works with wall creation
+
+---
+
+## Next Steps After Wall Mode
+
+1. **Horizontal Elements (Slabs/Roofs)**
+   - Similar UVW but V might not be vertical
+   - Add "pitch" parameter for roofs
+   - U = length, V = width, W = thickness
+
+2. **Element Types**
+   - Wall (vertical, W perpendicular)
+   - Slab (horizontal, W = depth)
+   - Beam (horizontal, follows line)
+   - Column (vertical, square section)
+
+3. **Advanced Features**
+   - Snap U to existing wall ends
+   - Auto-join walls at corners
+   - T-junction handling
+   - Openings (doors/windows) as sub-elements
+
+4. **BIM Integration**
+   - Element properties (material, fire rating, etc.)
+   - IFC export with proper element types
+   - Layer/level management
+
+---
+
+## Code Integration Points
+
+### Files to Modify:
+1. **index.html** - Add wallMode checkbox, update modal labels
+2. **index.js** - Add wallDrawing state, functions, event handlers
+3. **style.css** - Add .field.active highlighting
+
+### Backward Compatibility:
+- Keep old box mode functional
+- Toggle between modes with checkbox
+- Default to wall mode (checked)
+- Old code paths still work for non-wall-mode
+
+### Gradual Rollout:
+1. Phase 1: Basic UVW input (this implementation)
+2. Phase 2: Better 3D preview with actual mesh
+3. Phase 3: Dimension labels in 3D view
+4. Phase 4: Snap to objects during U drag
+5. Phase 5: Element type selector (wall/slab/beam)

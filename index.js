@@ -77,6 +77,9 @@ const hgtEl = document.getElementById("hgt");
 const baseYEl = document.getElementById("baseY");
 const snapEl = document.getElementById("snap");
 const snapSizeEl = document.getElementById("snapSize");
+const angleSnapEl = document.getElementById("angleSnap");
+const angleSnapIncrementEl = document.getElementById("angleSnapIncrement");
+const customAngleEl = document.getElementById("customAngle");
 const ppEl = document.getElementById("pp");
 const wallModeEl = document.getElementById("wallMode");
 const outEl = document.getElementById("out");
@@ -344,20 +347,34 @@ dlClear?.addEventListener("click", () => { clearDimModal(); dlManual.L = dlManua
 
 // Modal ENTER/ESC key handler (uses capture to run before other handlers)
 window.addEventListener("keydown", (e) => {
+  const isMac = navigator.platform.toUpperCase().includes("MAC");
+  const mod = isMac ? e.metaKey : e.ctrlKey;
+  
+  // Undo / Redo - work even with modal open (but not while typing in fields)
+  if (mod && e.key.toLowerCase() === "z" && !isTypingTarget(document.activeElement)) {
+    e.preventDefault();
+    if (e.shiftKey) doRedo(); // Cmd/Ctrl+Shift+Z
+    else doUndo();            // Cmd/Ctrl+Z
+    return;
+  }
+  if (mod && e.key.toLowerCase() === "y" && !isTypingTarget(document.activeElement)) {
+    e.preventDefault();
+    doRedo();                 // Ctrl+Y
+    return;
+  }
+  
   if (!dimModal) return;
   const isOpen = dimModal.getAttribute("aria-hidden") === "false";
   if (!isOpen) return;
 
-  // ENTER / NUMPAD ENTER => Click the Apply button or advance wall mode
+  // ENTER / NUMPAD ENTER => Complete wall or apply
   if (e.key === "Enter" || e.code === "NumpadEnter") {
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     e.preventDefault();
     
-    // Wall mode ENTER handling
+    // Wall mode: ENTER completes the wall (after all fields set)
     if (wallDrawing.active) {
-      if (wallDrawing.step === 1) lockWallU();
-      else if (wallDrawing.step === 2) lockWallV();
-      else if (wallDrawing.step === 3) completeWall();
+      completeWall();
     } else {
       dlApply?.click();
     }
@@ -390,7 +407,8 @@ let wallDrawing = {
   U: null,              // { direction: THREE.Vector3 (unit), length: number }
   V: null,              // { direction: THREE.Vector3 (unit), length: number }
   W: null,              // { direction: THREE.Vector3 (unit), length: number }
-  currentMousePt: null  // Latest mouse position
+  currentMousePt: null, // Latest mouse position
+  editingWall: null     // Reference to wall being edited (null if creating new)
 };
 
 
@@ -558,7 +576,76 @@ function setSingleSelection(id) {
   selected.clear();
   selected.add(id);
   refreshSelectionVisuals();
+  
+  // If in wall mode AND not actively drawing/editing, populate modal with selected wall's dimensions
+  // (Don't re-open modal immediately after creating a wall)
+  if (isWallMode() && !wallDrawing.active) {
+    const obj = getObjectById(id);
+    if (obj) {
+      populateModalFromWall(obj);
+    }
+  }
+  
   exportQuantities();
+}
+
+function populateModalFromWall(obj) {
+  // Get dimensions from the wall
+  const params = obj.mesh.geometry.parameters;
+  const width = params.width;   // U (length along X axis)
+  const height = params.height; // V (height along Y axis)
+  const depth = params.depth;   // W (thickness along Z axis)
+  
+  // Check if this wall has UVW metadata
+  if (obj.meta && obj.meta.uvw) {
+    // Use stored UVW dimensions
+    if (dlU) dlU.value = String(Math.round(obj.meta.uvw.U));
+    if (dlV) dlV.value = String(Math.round(obj.meta.uvw.V));
+    if (dlW) dlW.value = String(Math.round(obj.meta.uvw.W));
+  } else {
+    // Fallback to geometry parameters
+    if (dlU) dlU.value = String(Math.round(width));
+    if (dlV) dlV.value = String(Math.round(height));
+    if (dlW) dlW.value = String(Math.round(depth));
+  }
+  
+  // Set baseY
+  if (dlBaseY && obj.meta && obj.meta.baseY != null) {
+    dlBaseY.value = String(Math.round(obj.meta.baseY));
+  }
+  
+  // Extract direction from rotation
+  const rotation = obj.mesh.rotation.y;
+  const uDirection = new THREE.Vector3(
+    Math.cos(-rotation),
+    0,
+    Math.sin(-rotation)
+  ).normalize();
+  
+  // Calculate W direction (perpendicular to U)
+  const wDirection = new THREE.Vector3()
+    .crossVectors(uDirection, new THREE.Vector3(0, 1, 0))
+    .normalize();
+  
+  // Calculate the ORIGINAL ORIGIN (start corner) from the center
+  // We created the wall with: center = origin + U/2 + W/2
+  // So: origin = center - U/2 - W/2
+  const center = obj.mesh.position;
+  const baseY = obj.meta.baseY || 0;
+  
+  const origin = new THREE.Vector3(
+    center.x - uDirection.x * (width / 2) - wDirection.x * (depth / 2),
+    baseY,  // Use baseY directly
+    center.z - uDirection.z * (width / 2) - wDirection.z * (depth / 2)
+  );
+  
+  // Start editing mode with the ACTUAL ORIGIN POINT
+  wallDrawing.active = true;
+  wallDrawing.origin = origin;  // Now this is the real start corner, not center!
+  wallDrawing.editingWall = obj; // Store reference to wall being edited
+  wallDrawing.U = { direction: uDirection, length: width };
+  
+  showDimModal();
 }
 
 function isTypingTarget(el) {
@@ -596,6 +683,7 @@ function cancelWallDrawing() {
   wallDrawing.V = null;
   wallDrawing.W = null;
   wallDrawing.currentMousePt = null;
+  wallDrawing.editingWall = null; // Clear editing reference
   clearPreview();
 }
 
@@ -603,17 +691,23 @@ function startWallDrawing(groundPoint) {
   if (!isWallMode()) return false;
   
   wallDrawing.active = true;
-  wallDrawing.step = 1; // Start with U
+  wallDrawing.step = 1;
   wallDrawing.origin = groundPoint.clone();
   wallDrawing.currentMousePt = groundPoint.clone();
   
+  // Set up initial U direction (will update as mouse moves)
+  wallDrawing.U = { direction: new THREE.Vector3(1, 0, 0), length: 0 };
+  
   showDimModal();
   
-  // Focus U input
-  requestAnimationFrame(() => {
-    dlU?.focus({ preventScroll: true });
-    if (typeof dlU?.select === "function") dlU.select();
-  });
+  // Set default values for V and W immediately
+  const defaultV = Number(hgtEl?.value) || 2700;
+  const defaultW = 230;
+  
+  if (dlV) dlV.value = String(defaultV);
+  if (dlW) dlW.value = String(defaultW);
+  
+  // Don't auto-focus - let user draw freely
   
   exportQuantities({ wall_drawing_started: true });
   return true;
@@ -631,37 +725,64 @@ function updateWallDrawingStep1_U(mousePoint) {
   
   if (length < 1) return; // Too small to show direction
   
-  const direction = delta.clone().normalize();
+  let direction = delta.clone().normalize();
+  
+  // Apply angle snapping if enabled
+  if (angleSnapEl?.checked) {
+    direction = snapAngle(direction);
+  }
+  
+  // Apply custom angle if specified
+  if (customAngleEl?.value) {
+    const customDeg = Number(customAngleEl.value);
+    if (!isNaN(customDeg)) {
+      const rad = (customDeg * Math.PI) / 180;
+      direction = new THREE.Vector3(Math.cos(rad), 0, Math.sin(rad)).normalize();
+    }
+  }
   
   // Update temporary U
   wallDrawing.U = { direction, length };
   
   // Update modal U field if not manually set
-  if (dlU && dlU !== document.activeElement && !uvwManual.U) {
-    dlU.value = String(Math.round(length));
+  if (dlU && dlU !== document.activeElement) {
+    // Always update if field is empty OR user hasn't manually typed
+    if (dlU.value === "" || !uvwManual.U) {
+      dlU.value = String(Math.round(length));
+    }
   }
   
   // Draw preview line
   updateWallPreview();
 }
 
+function snapAngle(direction) {
+  // Get current angle in degrees
+  const currentAngle = Math.atan2(direction.z, direction.x) * (180 / Math.PI);
+  
+  // Get snap increment
+  const increment = Number(angleSnapIncrementEl?.value) || 45;
+  
+  // Snap to nearest increment
+  const snappedAngle = Math.round(currentAngle / increment) * increment;
+  
+  // Convert back to radians and create new direction
+  const rad = (snappedAngle * Math.PI) / 180;
+  return new THREE.Vector3(Math.cos(rad), 0, Math.sin(rad)).normalize();
+}
+
 function lockWallU() {
   if (!wallDrawing.active || wallDrawing.step !== 1) return false;
   if (!wallDrawing.U || wallDrawing.U.length < 1) return false;
   
-  // Lock U from input if typed
+  // Lock U from input if typed, otherwise use current mouse position length
   const typedU = dlU?.value ? Number(dlU.value) : null;
   if (typedU && typedU > 0) {
     wallDrawing.U.length = typedU;
   }
+  // If nothing typed, wallDrawing.U already has the mouse length
   
   wallDrawing.step = 2; // Advance to V
-  
-  // Focus V input
-  requestAnimationFrame(() => {
-    dlV?.focus({ preventScroll: true });
-    if (typeof dlV?.select === "function") dlV.select();
-  });
   
   // Set default V from sidebar height or use 2700mm
   const defaultV = Number(hgtEl?.value) || 2700;
@@ -671,6 +792,13 @@ function lockWallU() {
   wallDrawing.V = { direction: new THREE.Vector3(0, 1, 0), length: defaultV };
   
   updateWallPreview();
+  
+  // Now focus V input for next step
+  requestAnimationFrame(() => {
+    dlV?.focus({ preventScroll: true });
+    if (typeof dlV?.select === "function") dlV.select();
+  });
+  
   exportQuantities({ wall_step: 2, U_locked: true });
   return true;
 }
@@ -714,59 +842,146 @@ function lockWallV() {
 
 function completeWall() {
   if (!wallDrawing.active) return false;
-  if (!wallDrawing.U || !wallDrawing.V || !wallDrawing.W) return false;
   
-  // Create wall box from UVW
-  const U = wallDrawing.U;
-  const V = wallDrawing.V;
-  const W = wallDrawing.W;
-  const origin = wallDrawing.origin;
+  // Get dimensions from modal fields
+  const uVal = dlU?.value ? Number(dlU.value) : null;
+  const vVal = dlV?.value ? Number(dlV.value) : null;
+  const wVal = dlW?.value ? Number(dlW.value) : null;
   
-  // Get baseY from UI or use origin.y
-  const baseY = Number(baseYEl?.value) || origin.y;
+  // Need at least U to create a wall
+  if (!uVal || uVal < 1) return false;
   
-  // Wall center is: origin + U/2 along U direction + W/2 along W direction + V/2 up
-  const centerX = origin.x + U.direction.x * (U.length / 2) + W.direction.x * (W.length / 2);
-  const centerY = baseY + V.length / 2;
-  const centerZ = origin.z + U.direction.z * (U.length / 2) + W.direction.z * (W.length / 2);
+  // Use defaults if V or W not specified
+  const uLength = uVal;
+  const vLength = vVal && vVal >= 0 ? vVal : (Number(hgtEl?.value) || 2700);
+  const wLength = wVal && wVal > 0 ? wVal : 230;
   
-  // Create geometry - dimensions are U.length × V.length × W.length
-  const geometry = new THREE.BoxGeometry(U.length, V.length, W.length);
-  const material = new THREE.MeshStandardMaterial({ color: NORMAL_COLOR });
-  const mesh = new THREE.Mesh(geometry, material);
-  
-  mesh.position.set(centerX, centerY, centerZ);
-  
-  // Rotate mesh to align with U direction
-  // U is in XZ plane, so rotate around Y axis
-  // BoxGeometry's local X axis should align with U
-  const angle = Math.atan2(U.direction.x, U.direction.z);
-  mesh.rotation.y = angle;
-  
-  const id = `box_${nextId++}`;
-  mesh.userData.id = id;
-  
-  scene.add(mesh);
-  
-  const box = {
-    id,
-    mesh,
-    meta: { 
-      baseY, 
-      height: V.length,
-      uvw: { U: U.length, V: V.length, W: W.length }
+  // Build U direction from current wallDrawing.U or fallback
+  let uDirection;
+  if (wallDrawing.U && wallDrawing.U.direction) {
+    uDirection = wallDrawing.U.direction.clone();
+  } else {
+    // Fallback: use last mouse position or default to +X
+    if (wallDrawing.currentMousePt && wallDrawing.origin) {
+      const delta = wallDrawing.currentMousePt.clone().sub(wallDrawing.origin);
+      delta.y = 0;
+      if (delta.length() > 0.1) {
+        uDirection = delta.normalize();
+      } else {
+        uDirection = new THREE.Vector3(1, 0, 0); // Default to +X
+      }
+    } else {
+      uDirection = new THREE.Vector3(1, 0, 0);
     }
-  };
+  }
   
-  objects.push(box);
-  setSingleSelection(id);
+  // V direction is always up
+  const vDirection = new THREE.Vector3(0, 1, 0);
+  
+  // W direction is perpendicular to U in XZ plane
+  const wDirection = new THREE.Vector3()
+    .crossVectors(uDirection, new THREE.Vector3(0, 1, 0))
+    .normalize();
+  
+  const baseY = Number(baseYEl?.value) || 0;
+  
+  // Check if we're editing an existing wall
+  if (wallDrawing.editingWall) {
+    // EDIT MODE: Update existing wall
+    const obj = wallDrawing.editingWall;
+    
+    // Save state for undo BEFORE making changes
+    const beforeSnap = snapshotBox(obj);
+    
+    // Update geometry
+    obj.mesh.geometry.dispose();
+    obj.mesh.geometry = new THREE.BoxGeometry(uLength, vLength, wLength);
+    
+    // Update metadata
+    obj.meta.baseY = baseY;
+    obj.meta.height = vLength;
+    obj.meta.uvw = { U: uLength, V: vLength, W: wLength };
+    
+    // Update position (recalculate center based on origin)
+    const origin = wallDrawing.origin;
+    const centerX = origin.x + uDirection.x * (uLength / 2) + wDirection.x * (wLength / 2);
+    const centerY = baseY + vLength / 2;
+    const centerZ = origin.z + uDirection.z * (uLength / 2) + wDirection.z * (wLength / 2);
+    obj.mesh.position.set(centerX, centerY, centerZ);
+    
+    // Update rotation
+    const angle = Math.atan2(uDirection.z, uDirection.x);
+    obj.mesh.rotation.y = -angle;
+    
+    obj.mesh.updateMatrixWorld(true);
+    
+    // Save AFTER state and push undo action
+    const afterSnap = snapshotBox(obj);
+    pushAction({
+      undo: () => restoreBoxFromSnapshot(beforeSnap),
+      redo: () => restoreBoxFromSnapshot(afterSnap)
+    });
+    
+    exportQuantities({ wall_edited: true, id: obj.id });
+  } else {
+    // CREATE MODE: Make new wall
+    const origin = wallDrawing.origin;
+    
+    // Wall center is: origin + U/2 along U direction + W/2 along W direction + V/2 up
+    const centerX = origin.x + uDirection.x * (uLength / 2) + wDirection.x * (wLength / 2);
+    const centerY = baseY + vLength / 2;
+    const centerZ = origin.z + uDirection.z * (uLength / 2) + wDirection.z * (wLength / 2);
+    
+    // Create geometry - dimensions are uLength × vLength × wLength
+    const geometry = new THREE.BoxGeometry(uLength, vLength, wLength);
+    const material = new THREE.MeshStandardMaterial({ color: NORMAL_COLOR });
+    const mesh = new THREE.Mesh(geometry, material);
+    
+    mesh.position.set(centerX, centerY, centerZ);
+    
+    // Rotate mesh to align with U direction
+    const angle = Math.atan2(uDirection.z, uDirection.x);
+    mesh.rotation.y = -angle;
+    
+    const id = `box_${nextId++}`;
+    mesh.userData.id = id;
+    
+    scene.add(mesh);
+    
+    const box = {
+      id,
+      mesh,
+      meta: { 
+        baseY, 
+        height: vLength,
+        uvw: { U: uLength, V: vLength, W: wLength }
+      }
+    };
+    
+    objects.push(box);
+    
+    // Undo record: create wall
+    const createdId = id;
+    pushAction({
+      undo: () => removeBoxById(createdId),
+      redo: () => restoreBoxFromSnapshot({
+        id: createdId,
+        meta: { baseY, height: vLength, uvw: { U: uLength, V: vLength, W: wLength } },
+        geom: { L: uLength, H: vLength, W: wLength },
+        pos: { x: centerX, y: centerY, z: centerZ },
+        rot: { x: 0, y: -angle, z: 0 }
+      })
+    });
+    
+    setSingleSelection(id);
+    
+    exportQuantities({ wall_created: true, dimensions: { U: uLength, V: vLength, W: wLength } });
+  }
   
   // Clear wall drawing state
   cancelWallDrawing();
   hideDimModal();
   clearDimModal();
-  
-  exportQuantities({ wall_created: true, dimensions: { U: U.length, V: V.length, W: W.length } });
   
   return true;
 }
@@ -927,12 +1142,20 @@ function doRedo() {
 
 function snapshotBox(o) {
   const p = o.mesh.geometry.parameters;
-  return {
+  const snap = {
     id: o.id,
     meta: { baseY: o.meta.baseY, height: o.meta.height },
     geom: { L: p.width, H: p.height, W: p.depth },
-    pos: { x: o.mesh.position.x, y: o.mesh.position.y, z: o.mesh.position.z }
+    pos: { x: o.mesh.position.x, y: o.mesh.position.y, z: o.mesh.position.z },
+    rot: { x: o.mesh.rotation.x, y: o.mesh.rotation.y, z: o.mesh.rotation.z }
   };
+  
+  // Include UVW metadata if present (for walls)
+  if (o.meta && o.meta.uvw) {
+    snap.meta.uvw = { ...o.meta.uvw };
+  }
+  
+  return snap;
 }
 
 function restoreBoxFromSnapshot(snap) {
@@ -945,9 +1168,22 @@ function restoreBoxFromSnapshot(snap) {
     mesh.userData.kind = "qs_box";
     mesh.userData.id = snap.id;
     mesh.position.set(snap.pos.x, snap.pos.y, snap.pos.z);
+    
+    // Restore rotation if present
+    if (snap.rot) {
+      mesh.rotation.set(snap.rot.x, snap.rot.y, snap.rot.z);
+    }
+    
     scene.add(mesh);
 
-    o = { id: snap.id, mesh, meta: { baseY: snap.meta.baseY, height: snap.meta.height } };
+    const meta = { baseY: snap.meta.baseY, height: snap.meta.height };
+    
+    // Restore UVW metadata if present (for walls)
+    if (snap.meta.uvw) {
+      meta.uvw = { ...snap.meta.uvw };
+    }
+    
+    o = { id: snap.id, mesh, meta };
     objects.push(o);
 
     // keep nextId ahead of restored ids (box_12 etc)
@@ -957,8 +1193,22 @@ function restoreBoxFromSnapshot(snap) {
     o.mesh.geometry.dispose();
     o.mesh.geometry = new THREE.BoxGeometry(snap.geom.L, snap.geom.H, snap.geom.W);
     o.mesh.position.set(snap.pos.x, snap.pos.y, snap.pos.z);
+    
+    // Restore rotation if present
+    if (snap.rot) {
+      o.mesh.rotation.set(snap.rot.x, snap.rot.y, snap.rot.z);
+    }
+    
     o.meta.baseY = snap.meta.baseY;
     o.meta.height = snap.meta.height;
+    
+    // Restore UVW metadata if present
+    if (snap.meta.uvw) {
+      o.meta.uvw = { ...snap.meta.uvw };
+    } else {
+      delete o.meta.uvw; // Remove if not in snapshot
+    }
+    
     o.mesh.updateMatrixWorld(true);
   }
 
@@ -1629,7 +1879,11 @@ if (ppEl?.checked && objects.length && !e.altKey) {
   // WALL MODE or BOX MODE
   if (isWallMode()) {
     if (!wallDrawing.active) {
+      // First click: start wall drawing
       startWallDrawing(p);
+    } else {
+      // Second click: complete the wall immediately
+      completeWall();
     }
   } else {
     // Original box mode logic
@@ -1679,14 +1933,6 @@ renderer.domElement.addEventListener("dblclick", (e) => e.preventDefault());
 window.addEventListener("keydown", (e) => {
   const isMac = navigator.platform.toUpperCase().includes("MAC");
   const mod = isMac ? e.metaKey : e.ctrlKey;
-
-  // Wall Mode TAB advancement
-  if (e.key === "Tab" && wallDrawing.active) {
-    e.preventDefault();
-    if (wallDrawing.step === 1) lockWallU();
-    else if (wallDrawing.step === 2) lockWallV();
-    return;
-  }
 
   // Undo / Redo (ignore while typing)
   if (mod && e.key.toLowerCase() === "z" && !isTypingTarget(document.activeElement)) {

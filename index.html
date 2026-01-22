@@ -20,6 +20,19 @@
   <div id="ui">
     <div class="ui-title">QS Box Takeoff (Multi)</div>
 
+    <!-- View Controls -->
+    <div class="ui-row" style="border-bottom: 1px solid #444; padding-bottom: 8px; margin-bottom: 8px;">
+      <label style="font-weight: bold; margin-bottom: 4px; display: block;">View</label>
+      <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 4px;">
+        <button id="viewPlan" type="button" class="btn secondary view-btn">Plan</button>
+        <button id="viewFront" type="button" class="btn secondary view-btn">Front</button>
+        <button id="viewRear" type="button" class="btn secondary view-btn">Rear</button>
+        <button id="viewLeft" type="button" class="btn secondary view-btn">Left</button>
+        <button id="viewRight" type="button" class="btn secondary view-btn">Right</button>
+        <button id="view3D" type="button" class="btn primary view-btn">3D</button>
+      </div>
+    </div>
+
     <div class="ui-row">
       <label>Length (X) mm</label>
       <input id="len" type="number" value="2000" />
@@ -65,13 +78,21 @@
       <label><input id="pp" type="checkbox" checked /> Push / Pull</label>
     </div>
 
-    <div class="ui-row ui-inline">
-      <label><input id="wallMode" type="checkbox" checked /> Wall Mode (UVW)</label>
+    <div class="ui-row" style="border-top: 1px solid #444; padding-top: 8px; margin-top: 8px;">
+      <label style="font-weight: bold; margin-bottom: 4px; display: block;">Drawing Mode</label>
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 4px;">
+        <button id="wallModeBtn" type="button" class="btn primary mode-btn">WALL</button>
+        <button id="slabModeBtn" type="button" class="btn secondary mode-btn">SLAB</button>
+      </div>
+      <div style="font-size: 11px; color: #999; margin-top: 4px;">
+        Click both off to navigate only
+      </div>
     </div>
 
     <div class="ui-actions">
       <button id="apply" type="button" class="btn primary">Apply to Selected</button>
       <button id="clear" type="button" class="btn secondary">Clear All</button>
+      <button id="resetOrigin" type="button" class="btn secondary" style="margin-top: 8px;">Reset to Origin (0,0)</button>
     </div>
 
     <label class="ui-subtitle">Export</label>

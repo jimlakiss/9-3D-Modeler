@@ -20,8 +20,25 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0b0c10);
 
-const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 1, 400000);
-camera.position.set(8000, 6500, 8000);
+// Perspective camera for 3D view
+const perspectiveCamera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 1, 400000);
+perspectiveCamera.position.set(8000, 6500, 8000);
+
+// Orthographic camera for 2D views (plan, elevations)
+const aspect = window.innerWidth / window.innerHeight;
+const frustumSize = 20000; // Adjust to show appropriate area
+const orthoCamera = new THREE.OrthographicCamera(
+  frustumSize * aspect / -2,
+  frustumSize * aspect / 2,
+  frustumSize / 2,
+  frustumSize / -2,
+  -100000,
+  100000
+);
+
+// Current active camera
+let camera = perspectiveCamera;
+let currentView = '3D'; // '3D', 'plan', 'front', 'rear', 'left', 'right'
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
@@ -34,6 +51,19 @@ controls.target.set(0, 0, 0);
 controls.enableDamping = true;
 controls.dampingFactor = 0.08;
 controls.screenSpacePanning = true;
+
+// Mouse button configuration
+controls.mouseButtons = {
+  LEFT: THREE.MOUSE.ROTATE,
+  MIDDLE: THREE.MOUSE.DOLLY,
+  RIGHT: THREE.MOUSE.PAN
+};
+
+// Touch configuration  
+controls.touches = {
+  ONE: THREE.TOUCH.ROTATE,
+  TWO: THREE.TOUCH.DOLLY_PAN
+};
 
 scene.add(new THREE.AmbientLight(0xffffff, 0.55));
 const dir = new THREE.DirectionalLight(0xffffff, 0.85);
@@ -81,25 +111,64 @@ const angleSnapEl = document.getElementById("angleSnap");
 const angleSnapIncrementEl = document.getElementById("angleSnapIncrement");
 const customAngleEl = document.getElementById("customAngle");
 const ppEl = document.getElementById("pp");
-const wallModeEl = document.getElementById("wallMode");
+const wallModeBtn = document.getElementById("wallModeBtn");
+const slabModeBtn = document.getElementById("slabModeBtn");
 const outEl = document.getElementById("out");
 const applyBtn = document.getElementById("apply");
 const clearBtn = document.getElementById("clear");
+const resetOriginBtn = document.getElementById("resetOrigin");
 const hintBoxMode = document.getElementById("hintBoxMode");
 const hintWallMode = document.getElementById("hintWallMode");
 
-// Toggle hints based on wall mode
-if (wallModeEl) {
-  wallModeEl.addEventListener("change", () => {
-    const isWall = wallModeEl.checked;
-    if (hintBoxMode) hintBoxMode.style.display = isWall ? "none" : "inline";
-    if (hintWallMode) hintWallMode.style.display = isWall ? "inline" : "none";
-  });
-  // Set initial state
-  const isWall = wallModeEl.checked;
-  if (hintBoxMode) hintBoxMode.style.display = isWall ? "none" : "inline";
-  if (hintWallMode) hintWallMode.style.display = isWall ? "inline" : "none";
+// View buttons
+const viewPlanBtn = document.getElementById("viewPlan");
+const viewFrontBtn = document.getElementById("viewFront");
+const viewRearBtn = document.getElementById("viewRear");
+const viewLeftBtn = document.getElementById("viewLeft");
+const viewRightBtn = document.getElementById("viewRight");
+const view3DBtn = document.getElementById("view3D");
+
+// Drawing mode state - independent toggles
+let wallModeEnabled = false;
+let slabModeEnabled = false;
+
+// Mode button handlers
+function updateModeButtons() {
+  // Update button styles
+  if (wallModeBtn) {
+    wallModeBtn.className = wallModeEnabled ? 'btn primary mode-btn' : 'btn secondary mode-btn';
+  }
+  if (slabModeBtn) {
+    slabModeBtn.className = slabModeEnabled ? 'btn primary mode-btn' : 'btn secondary mode-btn';
+  }
+  
+  // Update hints
+  if (hintBoxMode) hintBoxMode.style.display = slabModeEnabled ? "inline" : "none";
+  if (hintWallMode) hintWallMode.style.display = wallModeEnabled ? "inline" : "none";
 }
+
+// Wire up mode buttons (independent toggles)
+if (wallModeBtn) {
+  wallModeBtn.addEventListener('click', () => {
+    wallModeEnabled = !wallModeEnabled;
+    // Turn off slab if turning on wall
+    if (wallModeEnabled) slabModeEnabled = false;
+    updateModeButtons();
+  });
+}
+if (slabModeBtn) {
+  slabModeBtn.addEventListener('click', () => {
+    slabModeEnabled = !slabModeEnabled;
+    // Turn off wall if turning on slab
+    if (slabModeEnabled) wallModeEnabled = false;
+    updateModeButtons();
+  });
+}
+
+// Set initial mode - start with neither enabled
+wallModeEnabled = false;
+slabModeEnabled = false;
+updateModeButtons();
 
 // -----------------------------
 // Dimension Modal (HTML/CSS based)
@@ -428,6 +497,14 @@ let pushPull = {
   before: null
 };
 
+let customPan = {
+  active: false,
+  pointerId: null,
+  startX: 0,
+  startY: 0,
+  startTarget: new THREE.Vector3()
+};
+
 let nextId = 1;
 
 // Box registry
@@ -450,9 +527,22 @@ const previewLine = new THREE.Line(previewLineGeom, previewLineMat);
 previewLine.visible = false;
 scene.add(previewLine);
 
+// Snap indicator (shows when cursor is near snap point)
+const snapIndicatorGeom = new THREE.SphereGeometry(200, 16, 16); // 200mm radius (was 100mm)
+const snapIndicatorMat = new THREE.MeshBasicMaterial({ 
+  color: 0x00ff00, // Bright green (easier to see than magenta)
+  transparent: true, 
+  opacity: 0.8,
+  depthTest: false
+});
+const snapIndicator = new THREE.Mesh(snapIndicatorGeom, snapIndicatorMat);
+snapIndicator.visible = false;
+scene.add(snapIndicator);
+
 function clearPreview() {
   previewLine.visible = false;
   previewLineGeom.setAttribute("position", new THREE.Float32BufferAttribute([], 3));
+  snapIndicator.visible = false; // Hide snap indicator too
 }
 
 // -----------------------------
@@ -485,7 +575,10 @@ function raycastGround(e) {
   setMouseFromEvent(e);
   raycaster.setFromCamera(mouseNDC, camera);
   const hits = raycaster.intersectObject(ground, false);
-  if (!hits.length) return null;
+  if (!hits.length) {
+    console.log("raycastGround: No ground hit! Camera:", currentView, "NDC:", mouseNDC);
+    return null;
+  }
   const p = hits[0].point.clone();
   p.y = 0;
 
@@ -501,6 +594,7 @@ function raycastGround(e) {
   p.x = res.x;
   p.z = res.z;
 
+  console.log(`raycastGround: Hit at (${Math.round(p.x)}, ${Math.round(p.z)}) View: ${currentView}`);
   return p;
 }
 
@@ -662,9 +756,13 @@ function populateModalFromWall(obj) {
   
   // Start editing mode with the ACTUAL ORIGIN POINT
   wallDrawing.active = true;
+  wallDrawing.step = 0; // 0 = editing mode (not creating)
   wallDrawing.origin = origin;  // Now this is the real start corner, not center!
   wallDrawing.editingWall = obj; // Store reference to wall being edited
   wallDrawing.U = { direction: uDirection, length: width };
+  
+  // Clear any preview from previous drawing
+  clearPreview();
   
   showDimModal();
 }
@@ -689,11 +787,128 @@ function cancelDrawing() {
 }
 
 // -----------------------------
+// View Switching (Orthographic views for Plan/Elevations)
+// -----------------------------
+function setView(view) {
+  currentView = view;
+  
+  // Update button styles
+  const allButtons = [viewPlanBtn, viewFrontBtn, viewRearBtn, viewLeftBtn, viewRightBtn, view3DBtn];
+  allButtons.forEach(btn => {
+    if (btn) btn.className = 'btn secondary view-btn';
+  });
+  
+  if (view === 'plan') {
+    // Plan view: Looking down (-Y direction)
+    camera = orthoCamera;
+    camera.position.set(0, 50000, 0);
+    camera.up.set(0, 0, -1); // Z points up in plan view
+    camera.lookAt(0, 0, 0); // Ensure camera is looking at origin
+    camera.updateProjectionMatrix(); // Update orthographic projection
+    controls.object = camera;
+    controls.target.set(0, 0, 0);
+    controls.enableRotate = false;
+    controls.enableDamping = false; // Disable damping for crisp orthographic view
+    // Disable all OrbitControls mouse buttons - we'll handle pan with SHIFT+LEFT
+    controls.mouseButtons = { LEFT: null, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: null };
+    if (viewPlanBtn) viewPlanBtn.className = 'btn primary view-btn';
+    
+  } else if (view === 'front') {
+    // Front elevation: Looking from +Z towards -Z
+    camera = orthoCamera;
+    camera.position.set(0, 0, 50000);
+    camera.up.set(0, 1, 0); // Y points up
+    camera.lookAt(0, 0, 0);
+    camera.updateProjectionMatrix();
+    controls.object = camera;
+    controls.target.set(0, 0, 0);
+    controls.enableRotate = false;
+    controls.enableDamping = false; // Disable damping
+    controls.mouseButtons = { LEFT: null, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: null };
+    if (viewFrontBtn) viewFrontBtn.className = 'btn primary view-btn';
+    
+  } else if (view === 'rear') {
+    // Rear elevation: Looking from -Z towards +Z
+    camera = orthoCamera;
+    camera.position.set(0, 0, -50000);
+    camera.up.set(0, 1, 0); // Y points up
+    camera.lookAt(0, 0, 0);
+    camera.updateProjectionMatrix();
+    controls.object = camera;
+    controls.target.set(0, 0, 0);
+    controls.enableRotate = false;
+    controls.enableDamping = false; // Disable damping
+    controls.mouseButtons = { LEFT: null, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: null };
+    if (viewRearBtn) viewRearBtn.className = 'btn primary view-btn';
+    
+  } else if (view === 'left') {
+    // Left elevation: Looking from -X towards +X
+    camera = orthoCamera;
+    camera.position.set(-50000, 0, 0);
+    camera.up.set(0, 1, 0); // Y points up
+    camera.lookAt(0, 0, 0);
+    camera.updateProjectionMatrix();
+    controls.object = camera;
+    controls.target.set(0, 0, 0);
+    controls.enableRotate = false;
+    controls.enableDamping = false; // Disable damping
+    controls.mouseButtons = { LEFT: null, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: null };
+    if (viewLeftBtn) viewLeftBtn.className = 'btn primary view-btn';
+    
+  } else if (view === 'right') {
+    // Right elevation: Looking from +X towards -X
+    camera = orthoCamera;
+    camera.position.set(50000, 0, 0);
+    camera.up.set(0, 1, 0); // Y points up
+    camera.lookAt(0, 0, 0);
+    camera.updateProjectionMatrix();
+    controls.object = camera;
+    controls.target.set(0, 0, 0);
+    controls.enableRotate = false;
+    controls.enableDamping = false; // Disable damping
+    controls.mouseButtons = { LEFT: null, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: null };
+    if (viewRightBtn) viewRightBtn.className = 'btn primary view-btn';
+    
+  } else {
+    // 3D view: Perspective camera
+    camera = perspectiveCamera;
+    controls.object = camera;
+    controls.enableRotate = true;
+    controls.enableDamping = true; // Re-enable damping for 3D
+    // In 3D: LEFT rotates, RIGHT/MIDDLE for pan
+    controls.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
+    if (view3DBtn) view3DBtn.className = 'btn primary view-btn';
+  }
+  
+  controls.update();
+}
+
+
+// Wire up view buttons
+if (viewPlanBtn) viewPlanBtn.addEventListener('click', () => setView('plan'));
+if (viewFrontBtn) viewFrontBtn.addEventListener('click', () => setView('front'));
+if (viewRearBtn) viewRearBtn.addEventListener('click', () => setView('rear'));
+if (viewLeftBtn) viewLeftBtn.addEventListener('click', () => setView('left'));
+if (viewRightBtn) viewRightBtn.addEventListener('click', () => setView('right'));
+if (view3DBtn) view3DBtn.addEventListener('click', () => setView('3D'));
+
+// Set initial view to 3D
+setView('3D');
+
+// -----------------------------
 // Wall Mode (UVW Sequential Input)
 // -----------------------------
 
 function isWallMode() {
-  return wallModeEl?.checked || false;
+  return wallModeEnabled;
+}
+
+function isSlabMode() {
+  return slabModeEnabled;
+}
+
+function isDrawingEnabled() {
+  return wallModeEnabled || slabModeEnabled;
 }
 
 function cancelWallDrawing() {
@@ -711,10 +926,14 @@ function cancelWallDrawing() {
 function startWallDrawing(groundPoint) {
   if (!isWallMode()) return false;
   
+  // Apply object snapping to start point
+  const snapped = snapToNearestObjectPoint(groundPoint.x, groundPoint.z);
+  const origin = new THREE.Vector3(snapped.x, groundPoint.y, snapped.z);
+  
   wallDrawing.active = true;
   wallDrawing.step = 1;
-  wallDrawing.origin = groundPoint.clone();
-  wallDrawing.currentMousePt = groundPoint.clone();
+  wallDrawing.origin = origin;
+  wallDrawing.currentMousePt = origin.clone();
   
   // Set up initial U direction (will update as mouse moves)
   wallDrawing.U = { direction: new THREE.Vector3(1, 0, 0), length: 0 };
@@ -737,10 +956,14 @@ function startWallDrawing(groundPoint) {
 function updateWallDrawingStep1_U(mousePoint) {
   if (!wallDrawing.active || wallDrawing.step !== 1) return;
   
-  wallDrawing.currentMousePt = mousePoint.clone();
+  // Apply object snapping to mouse point
+  const snapped = snapToNearestObjectPoint(mousePoint.x, mousePoint.z);
+  const snappedPoint = new THREE.Vector3(snapped.x, mousePoint.y, snapped.z);
   
-  // Calculate U direction and length from origin to mouse
-  const delta = mousePoint.clone().sub(wallDrawing.origin);
+  wallDrawing.currentMousePt = snappedPoint;
+  
+  // Calculate U direction and length from origin to snapped mouse point
+  const delta = snappedPoint.clone().sub(wallDrawing.origin);
   delta.y = 0; // Keep in horizontal plane
   const length = delta.length();
   
@@ -1250,7 +1473,7 @@ function removeBoxById(id) {
 
 // --- Snap-to-objects settings ---
 const SNAP_TO_OBJECTS = true;     // set false to disable quickly
-const SNAP_RADIUS_MM = 150;       // how close you need to be to snap (mm)
+const SNAP_RADIUS_MM = 500;       // how close you need to be to snap (mm)
 
 // Return snap points (XZ) for all boxes: 4 base corners + 4 top corners + center + edge midpoints (base)
 function collectSnapPoints() {
@@ -1258,7 +1481,6 @@ function collectSnapPoints() {
 
   for (const o of objects) {
     const m = o.mesh;
-    const p = m.position;
     const { width: L, height: H, depth: W } = m.geometry.parameters;
 
     const halfL = L / 2;
@@ -1267,36 +1489,54 @@ function collectSnapPoints() {
     const baseY = o.meta.baseY;
     const topY = baseY + H;
 
-    // Base corners (XZ important)
-    const baseCorners = [
-      new THREE.Vector3(p.x - halfL, baseY, p.z - halfW),
-      new THREE.Vector3(p.x + halfL, baseY, p.z - halfW),
-      new THREE.Vector3(p.x + halfL, baseY, p.z + halfW),
-      new THREE.Vector3(p.x - halfL, baseY, p.z + halfW),
+    // Create LOCAL corner positions (relative to mesh center)
+    // Then transform to WORLD space using mesh's world matrix
+    const localCorners = [
+      new THREE.Vector3(-halfL, 0, -halfW), // Bottom-left
+      new THREE.Vector3(+halfL, 0, -halfW), // Bottom-right
+      new THREE.Vector3(+halfL, 0, +halfW), // Top-right
+      new THREE.Vector3(-halfL, 0, +halfW), // Top-left
     ];
 
-    // Base edge midpoints (nice for snapping walls, etc.)
-    const baseMids = [
-      new THREE.Vector3(p.x, baseY, p.z - halfW),
-      new THREE.Vector3(p.x + halfL, baseY, p.z),
-      new THREE.Vector3(p.x, baseY, p.z + halfW),
-      new THREE.Vector3(p.x - halfL, baseY, p.z),
+    const localMidpoints = [
+      new THREE.Vector3(0, 0, -halfW),      // Bottom mid
+      new THREE.Vector3(+halfL, 0, 0),      // Right mid
+      new THREE.Vector3(0, 0, +halfW),      // Top mid
+      new THREE.Vector3(-halfL, 0, 0),      // Left mid
     ];
 
-    // Center
-    const center = new THREE.Vector3(p.x, baseY, p.z);
+    const localCenter = new THREE.Vector3(0, 0, 0);
 
-    // Top corners (optional — same XZ as base; still useful if later you add stacked snapping)
-    const topCorners = baseCorners.map(v => v.clone().setY(topY));
+    // Transform all local positions to world space
+    const worldCorners = localCorners.map(v => {
+      const world = v.clone().applyMatrix4(m.matrixWorld);
+      world.y = baseY; // Set to base level
+      return world;
+    });
 
-    pts.push(...baseCorners, ...baseMids, center, ...topCorners);
+    const worldMidpoints = localMidpoints.map(v => {
+      const world = v.clone().applyMatrix4(m.matrixWorld);
+      world.y = baseY;
+      return world;
+    });
+
+    const worldCenter = localCenter.clone().applyMatrix4(m.matrixWorld);
+    worldCenter.y = baseY;
+
+    // Top corners (same XZ as base, but at top height)
+    const worldTopCorners = worldCorners.map(v => v.clone().setY(topY));
+
+    pts.push(...worldCorners, ...worldMidpoints, worldCenter, ...worldTopCorners);
   }
 
   return pts;
 }
 
 function snapToNearestObjectPoint(x, z) {
-  if (!SNAP_TO_OBJECTS || objects.length === 0) return { x, z, snapped: false };
+  if (!SNAP_TO_OBJECTS || objects.length === 0) {
+    snapIndicator.visible = false;
+    return { x, z, snapped: false };
+  }
 
   const pts = collectSnapPoints();
   let best = null;
@@ -1312,7 +1552,17 @@ function snapToNearestObjectPoint(x, z) {
     }
   }
 
-  if (!best) return { x, z, snapped: false };
+  if (!best) {
+    snapIndicator.visible = false;
+    return { x, z, snapped: false };
+  }
+  
+  // Show snap indicator at snap point
+  snapIndicator.position.set(best.x, best.y, best.z);
+  snapIndicator.visible = true;
+  
+  console.log(`SNAPPED! From (${Math.round(x)}, ${Math.round(z)}) to (${Math.round(best.x)}, ${Math.round(best.z)})`);
+  
   return { x: best.x, z: best.z, snapped: true };
 }
 // -----------------------------
@@ -1374,6 +1624,9 @@ function applyInputsToSelection() {
   const sels = selectedObjects();
   if (!sels.length) return;
 
+  // Capture before state for undo
+  const before = sels.map(o => snapshotBox(o));
+
   const L = Math.max(1, Number(lenEl?.value) || 1);
   const W = Math.max(1, Number(widEl?.value) || 1);
   const H = Math.max(0, Number(hgtEl?.value) || 0);
@@ -1389,6 +1642,20 @@ function applyInputsToSelection() {
     o.mesh.position.y = baseY + H / 2;
     o.mesh.updateMatrixWorld(true);
   }
+  
+  // Capture after state and create undo action
+  const after = sels.map(o => snapshotBox(o));
+  
+  pushAction({
+    undo: () => { 
+      before.forEach(s => restoreBoxFromSnapshot(s)); 
+      refreshSelectionVisuals(); 
+    },
+    redo: () => { 
+      after.forEach(s => restoreBoxFromSnapshot(s)); 
+      refreshSelectionVisuals(); 
+    }
+  });
 
   exportQuantities();
 }
@@ -1568,6 +1835,62 @@ function endDrag(e) {
   controls.enabled = true;
   try { renderer.domElement.releasePointerCapture(e.pointerId); } catch {}
   exportQuantities({ dragging: false });
+}
+
+// -----------------------------
+// Custom Pan (SHIFT + LEFT CLICK)
+// -----------------------------
+function startCustomPan(e) {
+  if (!e.shiftKey) return false;
+  
+  customPan.active = true;
+  customPan.pointerId = e.pointerId;
+  customPan.startX = e.clientX;
+  customPan.startY = e.clientY;
+  customPan.startTarget = controls.target.clone();
+  
+  controls.enabled = false;
+  renderer.domElement.setPointerCapture(e.pointerId);
+  return true;
+}
+
+function updateCustomPan(e) {
+  if (!customPan.active) return;
+  
+  const deltaX = e.clientX - customPan.startX;
+  const deltaY = e.clientY - customPan.startY;
+  
+  // Convert screen delta to world delta
+  // Pan sensitivity based on camera distance
+  const distance = camera.position.distanceTo(controls.target);
+  const panSpeed = distance * 0.001; // Adjust sensitivity
+  
+  // Calculate pan direction based on camera
+  const panX = new THREE.Vector3();
+  const panY = new THREE.Vector3();
+  
+  camera.getWorldDirection(new THREE.Vector3()); // Update camera matrices
+  
+  // Get camera right and up vectors
+  panX.setFromMatrixColumn(camera.matrix, 0); // Right
+  panY.setFromMatrixColumn(camera.matrix, 1); // Up
+  
+  // Apply pan
+  const offset = new THREE.Vector3();
+  offset.add(panX.multiplyScalar(-deltaX * panSpeed));
+  offset.add(panY.multiplyScalar(deltaY * panSpeed));
+  
+  controls.target.copy(customPan.startTarget).add(offset);
+  controls.update();
+}
+
+function endCustomPan(e) {
+  if (!customPan.active) return;
+  
+  customPan.active = false;
+  customPan.pointerId = null;
+  controls.enabled = true;
+  try { renderer.domElement.releasePointerCapture(e.pointerId); } catch {}
 }
 
 
@@ -1847,6 +2170,10 @@ function deleteSelected() {
 //  (select / draw / drag / pushpull)
 // -----------------------------
 renderer.domElement.addEventListener("pointermove", (e) => {
+  if (customPan.active) {
+    updateCustomPan(e);
+    return;
+  }
   if (pushPull.active) {
     updatePushPull(e);
     return;
@@ -1866,26 +2193,46 @@ renderer.domElement.addEventListener("pointermove", (e) => {
     }
     return;
   }
+  
+  // Clear wall preview if we're not actively creating (prevents ghosting)
+  if (wallDrawing.active && (wallDrawing.step !== 1 || wallDrawing.editingWall)) {
+    clearPreview();
+  }
 
-  // Box mode drawing
+  // Box mode drawing with snapping
   if (drawing && startPt) {
     const p = raycastGround(e);
     if (!p) return;
-    lastGroundPoint = p.clone();
-    updateDimModalLive(p);
-    updateSidebarLive(p);
-    currentPt = computeEndpoint(startPt, p);
+    
+    // Apply object snapping to current point
+    const snapped = snapToNearestObjectPoint(p.x, p.z);
+    const snappedPt = new THREE.Vector3(snapped.x, p.y, snapped.z);
+    
+    lastGroundPoint = snappedPt.clone();
+    updateDimModalLive(snappedPt);
+    updateSidebarLive(snappedPt);
+    currentPt = computeEndpoint(startPt, snappedPt);
     updatePreviewRect(startPt, currentPt);
   }
 });
 
 renderer.domElement.addEventListener("pointerdown", (e) => {
-  if (pushPull.active || drag.active) return;
+  if (pushPull.active || drag.active || customPan.active) return;
   if (e.button !== 0) return;
 
+  // SHIFT + LEFT = Custom pan (overrides everything)
+  if (e.shiftKey) {
+    const started = startCustomPan(e);
+    if (started) return;
+  }
+
   // If push/pull enabled, try start push/pull first (unless Alt held = MOVE override)
-  // Also skip push/pull if in wall editing mode
-  if (ppEl?.checked && objects.length && !e.altKey && !wallDrawing.editingWall) {
+  // Skip push/pull if:
+  // - In wall editing mode, OR
+  // - In wall mode and clicking on an object (to allow wall editing)
+  const skipPushPull = wallDrawing.editingWall || (isWallMode() && objects.length > 0);
+  
+  if (ppEl?.checked && objects.length && !e.altKey && !skipPushPull) {
     const started = startPushPull(e);
     if (started) return;
   }
@@ -1910,30 +2257,51 @@ renderer.domElement.addEventListener("pointerdown", (e) => {
   // Empty click: clear selection unless ctrl/cmd held
   if (!(e.ctrlKey || e.metaKey)) clearSelection();
 
-  // Drawing start
+  // Drawing start (only if mode is enabled)
+  if (!isDrawingEnabled()) {
+    console.log("Drawing disabled - both modes off");
+    return; // Don't draw if both modes are off
+  }
+  
   const p = raycastGround(e);
-  if (!p) return;
+  if (!p) {
+    console.log("No ground point from raycast");
+    return;
+  }
+
+  console.log(`Drawing enabled. Wall mode: ${isWallMode()}, Slab mode: ${isSlabMode()}`);
 
   // WALL MODE or BOX MODE
   if (isWallMode()) {
+    console.log("Wall mode active, wallDrawing.active:", wallDrawing.active);
     if (!wallDrawing.active) {
       // First click: start wall drawing
+      console.log("Starting wall at", p);
       startWallDrawing(p);
     } else {
       // Second click: complete the wall immediately
+      console.log("Completing wall");
       completeWall();
     }
-  } else {
-    // Original box mode logic
+  } else if (isSlabMode()) {
+    // Slab mode logic with snapping
     if (!drawing) {
+      // First click: start slab with snapping
+      const snapped = snapToNearestObjectPoint(p.x, p.z);
+      const snappedPt = new THREE.Vector3(snapped.x, p.y, snapped.z);
+      
       drawing = true;
-      startPt = p;
-      currentPt = p.clone();
+      startPt = snappedPt;
+      currentPt = snappedPt.clone();
       clearPreview();
       showDimModal();
       exportQuantities({ drawing: "started" });
     } else {
-      currentPt = computeEndpoint(startPt, p);
+      // Second click: finish slab with snapping
+      const snapped = snapToNearestObjectPoint(p.x, p.z);
+      const snappedPt = new THREE.Vector3(snapped.x, p.y, snapped.z);
+      
+      currentPt = computeEndpoint(startPt, snappedPt);
       updatePreviewRect(startPt, currentPt);
       createBoxFromFootprint(startPt, currentPt);
       drawing = false;
@@ -1948,6 +2316,10 @@ renderer.domElement.addEventListener("pointerdown", (e) => {
 });
 
 renderer.domElement.addEventListener("pointerup", (e) => {
+  if (customPan.active && e.pointerId === customPan.pointerId) {
+    endCustomPan(e);
+    return;
+  }
   if (pushPull.active && e.pointerId === pushPull.pointerId) {
     endPushPull(e);
     return;
@@ -1959,6 +2331,7 @@ renderer.domElement.addEventListener("pointerup", (e) => {
 });
 
 renderer.domElement.addEventListener("pointercancel", (e) => {
+  if (customPan.active) endCustomPan(e);
   if (pushPull.active) endPushPull(e);
   if (drag.active) endDrag(e);
 });
@@ -2047,6 +2420,13 @@ clearBtn?.addEventListener("click", () => {
   exportQuantities({ cleared: true });
 });
 
+resetOriginBtn?.addEventListener("click", () => {
+  // Reset camera target to origin (0,0,0)
+  controls.target.set(0, 0, 0);
+  controls.update();
+  console.log("Camera reset to origin (0,0,0)");
+});
+
 // Light output refresh when editing inputs
 [lenEl, widEl, hgtEl, baseYEl, snapEl, snapSizeEl, ppEl].forEach(el => {
   el?.addEventListener("input", () => exportQuantities());
@@ -2063,8 +2443,19 @@ function animate() {
 animate();
 
 window.addEventListener("resize", () => {
-  camera.aspect = window.innerWidth / window.innerHeight;
-  camera.updateProjectionMatrix();
+  const aspect = window.innerWidth / window.innerHeight;
+  
+  // Update perspective camera
+  perspectiveCamera.aspect = aspect;
+  perspectiveCamera.updateProjectionMatrix();
+  
+  // Update orthographic camera
+  orthoCamera.left = frustumSize * aspect / -2;
+  orthoCamera.right = frustumSize * aspect / 2;
+  orthoCamera.top = frustumSize / 2;
+  orthoCamera.bottom = frustumSize / -2;
+  orthoCamera.updateProjectionMatrix();
+  
   renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
